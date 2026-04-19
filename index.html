@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta
+  name="viewport"
+  content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+/>
+<title>Scryer FFT-Laplace -- Hive Mind Interface</title>
+<style>
+  :root {
+    color-scheme: dark;
+  }
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background-color: #000;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+      "Courier New", monospace;
+  }
+  canvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  #ontologyOverlay {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%,-50%);
+    color: rgba(0,255,0,0.8);
+    font-size: 18px;
+    pointer-events: none;
+    text-align: center;
+    text-shadow: 0 0 15px #0f0, 0 0 30px rgba(0,255,0,0.6);
+    animation: pulse 2s infinite;
+    max-width: 80%;
+    transition: color .5s ease, text-shadow .5s ease;
+  }
+  @keyframes pulse { 0%,100%{opacity:.7} 50%{opacity:1} }
+
+  #controls {
+    position: fixed;
+    bottom: 20px;
+    left: 20px;
+    background: rgba(0, 20, 0, 0.9);
+    padding: 15px;
+    border: 1px solid rgba(0, 255, 0, 0.3);
+    border-radius: 6px;
+    color: #00ff64;
+    backdrop-filter: blur(10px);
+    max-width: 300px;
+  }
+  #controls div {
+    margin: 8px 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  #controls span {
+    width: 130px;
+    font-size: 11px;
+  }
+  #controls input[type="range"] {
+    width: 120px;
+    height: 5px;
+    background: rgba(0,255,0,0.2);
+    outline: none;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  #controls input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 15px; height: 15px;
+    background: #00ff64; border-radius: 50%;
+    cursor: pointer; box-shadow: 0 0 10px #00ff64;
+  }
+  /* Firefox */
+  #controls input[type="range"]::-moz-range-thumb {
+    width: 15px; height: 15px; border: none;
+    background: #00ff64; border-radius: 50%;
+    box-shadow: 0 0 10px #00ff64;
+  }
+
+  #infoPanel {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: rgba(0, 20, 0, 0.9);
+    padding: 15px;
+    border: 1px solid rgba(0, 255, 0, 0.3);
+    border-radius: 6px;
+    color: #00ff64;
+    font-size: 11px;
+    backdrop-filter: blur(10px);
+    min-width: 170px;
+  }
+  #infoPanel div { margin: 5px 0; }
+
+  .unstable { color: #ff5252 !important; animation: instability .5s infinite; }
+  .stable   { color: #64ff64 !important; }
+  @keyframes instability { 0%,100%{opacity:1} 50%{opacity:.75} }
+</style>
+</head>
+<body>
+  <canvas id="matrixCanvas"></canvas>
+  <div id="ontologyOverlay">𝓛{f(t)} = ∫₀^∞ f(t) e^{-st} dt</div>
+
+  <div id="controls">
+    <div id="fftControl">
+      <span>FFT Resonance</span>
+      <input type="range" id="fftResonance" min="0" max="100" value="50" />
+    </div>
+    <div id="spiralControl">
+      <span>Spiral Density</span>
+      <input type="range" id="spiralDensity" min="1" max="20" value="5" />
+    </div>
+    <div id="phiControl">
+      <span>φ Harmony</span>
+      <input type="range" id="phiHarmony" min="0" max="100" value="50" />
+    </div>
+    <div id="laplaceControl">
+      <span>Laplace Power</span>
+      <input type="range" id="laplacePower" min="0" max="100" value="30" />
+    </div>
+    <div id="stabilityControl">
+      <span>System Stability</span>
+      <input type="range" id="systemStability" min="-100" max="100" value="0" />
+    </div>
+    <div id="chaosControl">
+      <span>Chaos Level</span>
+      <input type="range" id="chaosLevel" min="0" max="100" value="25" />
+    </div>
+  </div>
+
+  <div id="infoPanel">
+    <div id="fftReadout">FFT: <span id="freqValue">0</span> Hz</div>
+    <div id="phaseReadout">Phase: <span id="phaseValue">0</span>°</div>
+    <div id="laplaceReadout">s-Domain: <span id="laplaceValue">0</span></div>
+    <div id="stabilityReadout">Stability: <span id="stabilityValue">NEUTRAL</span></div>
+    <div id="harmonyReadout">φ-Sync: <span id="harmonyValue">50</span>%</div>
+  </div>
+
+<script>
+/* =========================
+   Canvas + DPI handling
+========================= */
+const canvas = document.getElementById("matrixCanvas");
+const ctx = canvas.getContext("2d");
+const overlay = document.getElementById("ontologyOverlay");
+
+function resizeCanvas() {
+  const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+  canvas.width = Math.floor(window.innerWidth * dpr);
+  canvas.height = Math.floor(window.innerHeight * dpr);
+  canvas.style.width = "100%";
+  canvas.style.height = "100%";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+resizeCanvas();
+window.addEventListener("resize", resizeCanvas);
+
+/* =========================
+   Character sets / Concepts
+========================= */
+const characterSets = {
+  latin: "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+  greek: "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ",
+  hebrew: "אבגדהוזחטיכלמנסעפצקרשת",
+  mathematical:
+    "∀∃∄∅∆∇∈∉∊∋∌∍∎∏∐∑∓∔∕∖∗∘∙√∛∜∝∞∧∨∩∪∫∬∭∮",
+  laplace: "∫₀^∞ e^(-st) 𝓛 𝓕 ℋ ℱ ℒ s σ ω ℜ ℑ",
+  chaos: "⚡⚠☢☣⚛☀☄✧✦✪✫⟐⟑⟒⟓⟔⟕⟖⟗⟘⟙⟚⟛",
+  mystical: "☰☱☲☳☴☵☶☷⚊⚋◊◈◉◎●○◐◑◒◓◔◕◖◗",
+};
+const characters = Object.values(characterSets).join("");
+
+const ontologicalConcepts = [
+  "⟨Being|Existence⟩ → ∞",
+  "𝓛{f(t)} = ∫₀^∞ f(t)e^{-st} dt",
+  "s-Domain: σ + jω ∈ ℂ",
+  "Poles → System Instability ⚠",
+  "Zeros → Signal Nullification ○",
+  "Form ⊂ Matter ⊃ Void",
+  "H(s) = Y(s)/X(s) (Transfer Fn)",
+  "ROC: Region of Convergence ◊",
+  "Time ⊗ Space = Reality",
+  "δ(t) ↔ 1   (Impulse)",
+  "u(t) ↔ 1/s (Step)",
+  "e^{−at} ↔ 1/(s+a) (Exp)",
+  "Convolution: f*g ↔ F(s)G(s)",
+  "∂/∂t ↔ sF(s) − f(0⁻)",
+  "Chaos ⊕ Order = Complexity",
+  "φ = (1 + √5)/2 ≈ 1.618",
+  "Stability: Re(s) < 0 ✓",
+  "Instability: Re(s) > 0 ⚡",
+  "Critical: Re(s) = 0 ◐",
+  "∞ = {x : x ∈ x}",
+];
+
+/* =========================
+   Globals / Controls
+========================= */
+const PHI = 1.618033988749;
+const PHI_INV = 1 / PHI;
+
+let fftResonance = 0.5;
+let spiralDensity = 5;
+let phiHarmony = 0.5;
+let laplacePower = 0.3;
+let systemStability = 0; // -1 .. 1
+let chaosLevel = 0.25;
+let globalPhase = 0;
+let mouseX = canvas.width / 2;
+let mouseY = canvas.height / 2;
+
+/* =========================
+   Laplace Engine
+========================= */
+class LaplaceEngine {
+  constructor() {
+    this.poles = [];
+    this.zeros = [];
+    this.stability = "NEUTRAL";
+    this.initializeSPlane();
+  }
+
+  initializeSPlane() {
+    this.poles = [];
+    this.zeros = [];
+    for (let i = 0; i < 8; i++) {
+      const poleReal = (Math.random() - 0.5) * 4 + systemStability; // shift by control
+      const poleImag = (Math.random() - 0.5) * 10;
+      this.poles.push({
+        real: poleReal,
+        imag: poleImag,
+        strength: Math.random(),
+      });
+      const zeroReal = (Math.random() - 0.5) * 2;
+      const zeroImag = (Math.random() - 0.5) * 8;
+      this.zeros.push({ real: zeroReal, imag: zeroImag });
+    }
+    this.updateStability();
+  }
+
+  updateStability() {
+    const unstable = this.poles.filter((p) => p.real > 0).length;
+    const marginal = this.poles.filter((p) => Math.abs(p.real) < 0.1).length;
+    if (unstable > 0) this.stability = "UNSTABLE";
+    else if (marginal > 2) this.stability = "MARGINAL";
+    else this.stability = "STABLE";
+  }
+
+  getImpulseResponse(t) {
+    let response = 0;
+    for (const pole of this.poles) {
+      if (pole.real < 0) {
+        response += pole.strength * Math.exp(pole.real * t) * Math.cos(pole.imag * t);
+      } else {
+        const growth = Math.min(10, Math.exp(pole.real * t));
+        response += pole.strength * growth * Math.cos(pole.imag * t);
+      }
+    }
+    return response;
+  }
+
+  updatePoles() {
+    for (const pole of this.poles) {
+      pole.real += (systemStability * 0.1 - pole.real) * 0.05;
+      pole.imag += (Math.random() - 0.5) * 0.1;
+      if (Math.random() < chaosLevel * 0.01) {
+        pole.real += (Math.random() - 0.5) * chaosLevel;
+        pole.imag += (Math.random() - 0.5) * chaosLevel * 2;
+      }
+    }
+    this.updateStability();
+  }
+}
+const laplaceEngine = new LaplaceEngine();
+
+/* =========================
+   FFT (naive DFT for demo)
+========================= */
+function quickFFT(signal) {
+  const N = signal.length;
+  const magnitudes = new Array(N).fill(0);
+  const phases = new Array(N).fill(0);
+  for (let k = 0; k < N; k++) {
+    let real = 0, imag = 0;
+    for (let n = 0; n < N; n++) {
+      const angle = (-2 * Math.PI * k * n) / N;
+      real += signal[n] * Math.cos(angle);
+      imag += signal[n] * Math.sin(angle);
+    }
+    magnitudes[k] = Math.hypot(real, imag) / N;
+    phases[k] = Math.atan2(imag, real);
+  }
+  return { magnitudes, phases };
+}
+
+/* =========================
+   Signal generation
+========================= */
+const signalSize = 64;
+let currentFFT;
+let currentSignal;
+
+function generateSignal(length) {
+  const arr = new Array(length);
+  const time = Date.now() / 1000;
+  for (let i = 0; i < length; i++) {
+    const t = i / length;
+
+    let value = Math.sin(2 * Math.PI * t + globalPhase);
+    value += 0.5 * Math.sin(4 * Math.PI * t * PHI + globalPhase * 2);
+    value += 0.3 * Math.sin(8 * Math.PI * t + globalPhase * 3);
+
+    const impulseResponse = laplaceEngine.getImpulseResponse(t * 10);
+    value += impulseResponse * laplacePower * 0.5;
+
+    if (laplaceEngine.stability === "UNSTABLE") {
+      value *= 1 + Math.exp(t * systemStability * 2) * 0.1;
+    } else if (laplaceEngine.stability === "STABLE") {
+      value *= Math.exp(-t * 0.5);
+    }
+
+    for (const pole of laplaceEngine.poles) {
+      if (pole.strength > 0.5) {
+        value += 0.1 * Math.sin(2 * Math.PI * t * Math.abs(pole.imag) + pole.real);
+      }
+    }
+
+    const mouseDist = Math.hypot(mouseX - canvas.width / 2, mouseY - canvas.height / 2);
+    value += 0.2 * Math.sin(16 * Math.PI * t + mouseDist * 0.01) * (1 + impulseResponse * 0.1);
+
+    value *= 1 + 0.3 * Math.sin(time * PHI_INV) + impulseResponse * 0.05;
+
+    if (Math.random() < chaosLevel * 0.01) {
+      value += (Math.random() - 0.5) * chaosLevel * (1 + Math.abs(impulseResponse));
+    }
+
+    arr[i] = value * (1 + fftResonance);
+  }
+  return arr;
+}
+currentSignal = generateSignal(signalSize);
+currentFFT = quickFFT(currentSignal);
+
+/* =========================
+   Color helpers
+========================= */
+function hslToRgb(h, s, l) {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h * 6) % 2) - 1));
+  const m = l - c / 2;
+  let r, g, b;
+  if (h < 1/6) [r, g, b] = [c, x, 0];
+  else if (h < 2/6) [r, g, b] = [x, c, 0];
+  else if (h < 3/6) [r, g, b] = [0, c, x];
+  else if (h < 4/6) [r, g, b] = [0, x, c];
+  else if (h < 5/6) [r, g, b] = [x, 0, c];
+  else [r, g, b] = [c, 0, x];
+  return [r + m, g + m, b + m];
+}
+
+function getLaplaceColor(index, phase = 0, impulseResponse = 0) {
+  let hue = (index * PHI_INV + phase / (2 * Math.PI) + globalPhase * 0.01) % 1;
+  hue += impulseResponse * laplacePower * 0.1;
+
+  let r, g, b;
+  if (laplaceEngine.stability === "UNSTABLE") {
+    hue = (hue + 0.08) % 1;
+    const s = 0.9 + Math.sin(globalPhase * 10) * 0.1;
+    const l = 0.7 + impulseResponse * 0.2;
+    [r, g, b] = hslToRgb(hue, s, l);
+  } else if (laplaceEngine.stability === "STABLE") {
+    hue = (hue + 0.45) % 1;
+    const s = 0.8;
+    const l = 0.5 + Math.abs(impulseResponse) * 0.3;
+    [r, g, b] = hslToRgb(hue, s, l);
+  } else {
+    const s = 0.8;
+    const l = 0.6 + impulseResponse * 0.2;
+    [r, g, b] = hslToRgb(hue, s, l);
+  }
+  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+}
+
+/* =========================
+   Symbol class
+========================= */
+class LaplaceSymbol {
+  constructor(x, y, speed, yPos, spiralType) {
+    this.x = x;
+    this.y = y;
+    this.baseX = x;
+    this.speed = speed;
+    this.text = characters[Math.floor(Math.random() * characters.length)];
+    this.opacity = 1;
+    this.yPos = yPos;
+    this.angle = Math.random() * Math.PI * 2;
+    this.spiralType = spiralType ?? Math.floor(Math.random() * 4);
+    this.spiralRadius = 10 + Math.random() * 50;
+    this.spiralSpeed = 0.02 + Math.random() * 0.08;
+    this.fftIndex = Math.floor(Math.random() * signalSize);
+    this.colorPhase = Math.random() * Math.PI * 2;
+    this.phiPhase = Math.random() * PHI * Math.PI;
+    this.entangled = null;
+    this.lastGlitch = 0;
+
+    // Laplace props
+    this.poleIndex = Math.floor(Math.random() * laplaceEngine.poles.length);
+    this.impulseResponse = 0;
+    this.systemResponse = 0;
+    this.transferFunction = Math.random();
+    this.resonantFreq = Math.random() * 10;
+    this.dampingRatio = Math.random();
+    this.isUnstable = false;
+    this.explosionFactor = 1;
+    this.sPlanePosition = { real: 0, imag: 0 };
+  }
+
+  entangle(other) {
+    this.entangled = other;
+    other.entangled = this;
+    this.transferFunction = (this.transferFunction + other.transferFunction) / 2;
+  }
+
+  updateLaplaceProperties() {
+    const pole = laplaceEngine.poles[this.poleIndex] ?? { real: -0.5, imag: 0, strength: 0.5 };
+    this.sPlanePosition = { real: pole.real, imag: pole.imag };
+    this.impulseResponse = laplaceEngine.getImpulseResponse(performance.now() / 1000);
+    this.isUnstable = pole.real > 0;
+    this.explosionFactor = this.isUnstable
+      ? Math.min(5, 1 + Math.exp(pole.real * 0.1))
+      : Math.max(0.1, Math.exp(pole.real * 0.1));
+    this.resonantFreq = Math.abs(pole.imag) + 1;
+  }
+
+  draw() {
+    this.updateLaplaceProperties();
+
+    const now = performance.now();
+    const glitchProbability = chaosLevel * 0.1 * (1 + Math.abs(this.impulseResponse));
+    if (now - this.lastGlitch > 500 && Math.random() < glitchProbability) {
+      if (laplaceEngine.stability === "UNSTABLE") {
+        this.text = characterSets.chaos[Math.floor(Math.random() * characterSets.chaos.length)];
+      } else if (Math.abs(this.impulseResponse) > 0.5) {
+        this.text = characterSets.laplace[Math.floor(Math.random() * characterSets.laplace.length)];
+      } else {
+        this.text = characters[Math.floor(Math.random() * characters.length)];
+      }
+      this.lastGlitch = now;
+    }
+
+    const fftValue = currentFFT.magnitudes[this.fftIndex] || 0;
+    const fftPhase = currentFFT.phases[this.fftIndex] || 0;
+    const fftScale = 1 + fftValue * fftResonance;
+
+    const laplaceScale = this.explosionFactor * (1 + Math.abs(this.impulseResponse) * laplacePower);
+    const totalScale = fftScale * laplaceScale;
+
+    if (this.entangled && phiHarmony > 0.5) {
+      this.phiPhase = (this.phiPhase + this.entangled.phiPhase * PHI_INV) / 2;
+      this.systemResponse = (this.impulseResponse + this.entangled.impulseResponse) * 0.5;
+    } else {
+      this.systemResponse = this.impulseResponse;
+    }
+
+    let spiralX, spiralY;
+    const harmonyInfluence = Math.sin(this.phiPhase) * phiHarmony;
+    const laplaceInfluence = this.systemResponse * laplacePower * 20;
+
+    switch (this.spiralType) {
+      case 0: {
+        const phiGrowth = PHI_INV * 0.1 * (1 + this.explosionFactor * 0.1);
+        spiralX = this.baseX + this.spiralRadius * Math.exp(phiGrowth * this.angle) * Math.cos(this.angle + fftPhase);
+        spiralY = this.y + this.spiralRadius * Math.exp(phiGrowth * this.angle) * Math.sin(this.angle + fftPhase);
+        break;
+      }
+      case 1: {
+        const responseRadius = this.spiralRadius * (1 + this.explosionFactor * 0.5);
+        spiralX = this.baseX + responseRadius * Math.cos(this.angle * PHI_INV + this.systemResponse);
+        spiralY = this.y + responseRadius * Math.sin(this.angle * PHI_INV + this.systemResponse);
+        break;
+      }
+      case 2: {
+        const r = 5 * Math.sqrt(this.angle) * this.explosionFactor;
+        spiralX = this.baseX + r * Math.cos(this.angle * this.resonantFreq + fftPhase);
+        spiralY = this.y + r * Math.sin(this.angle * this.resonantFreq + fftPhase);
+        break;
+      }
+      default: {
+        const A = this.spiralRadius * totalScale;
+        const B = A * PHI_INV * this.transferFunction;
+        spiralX = this.baseX + A * Math.sin(3 * this.angle * this.resonantFreq + fftPhase);
+        spiralY = this.y + B * Math.sin(2 * this.angle + this.systemResponse);
+      }
+    }
+
+    spiralX += harmonyInfluence * 10 + laplaceInfluence;
+    spiralY += harmonyInfluence * 10 + laplaceInfluence * 0.5;
+
+    const [r, g, b] = getLaplaceColor(this.fftIndex, fftPhase + this.phiPhase, this.systemResponse);
+    let glowSize = 8 + fftValue * 8 + phiHarmony * 5;
+    glowSize *= 1 + Math.abs(this.systemResponse) * laplacePower;
+
+    if (this.isUnstable) {
+      glowSize *= 1.5;
+      ctx.shadowColor = `rgba(255, ${Math.floor(g * 0.5)}, ${Math.floor(b * 0.3)}, ${this.opacity})`;
+    } else {
+      ctx.shadowColor = `rgba(${r}, ${g}, ${b}, ${this.opacity})`;
+    }
+
+    ctx.shadowBlur = glowSize;
+    ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${this.opacity})`;
+
+    const fontSize = 14 * totalScale * (1 + Math.abs(this.systemResponse) * 0.5);
+    ctx.font = `${fontSize}px monospace`;
+
+    if (this.isUnstable && Math.random() < 0.1) {
+      ctx.save();
+      ctx.translate(spiralX, spiralY);
+      ctx.rotate((Math.random() - 0.5) * 0.5);
+      ctx.scale(1 + (Math.random() - 0.5) * 0.3, 1 + (Math.random() - 0.5) * 0.3);
+      ctx.fillText(this.text, 0, 0);
+      ctx.restore();
+    } else {
+      ctx.fillText(this.text, spiralX, spiralY);
+    }
+
+    this.angle += this.spiralSpeed * (1 + fftValue * 0.5) * PHI_INV * this.explosionFactor;
+    this.y += this.speed * (1 + Math.abs(this.systemResponse) * 0.2);
+    this.opacity -= 0.003 * (1 + Math.abs(this.systemResponse) * 0.5);
+    this.phiPhase += 0.05 * PHI_INV * this.resonantFreq;
+    this.colorPhase += PHI_INV * 0.01;
+
+    if (this.opacity <= 0) this.respawn();
+  }
+
+  respawn() {
+    this.y = this.yPos;
+    this.opacity = 1;
+    this.text = characters[Math.floor(Math.random() * characters.length)];
+    this.fftIndex = Math.floor(Math.random() * signalSize);
+    this.poleIndex = Math.floor(Math.random() * laplaceEngine.poles.length);
+    this.transferFunction = Math.random();
+    this.explosionFactor = 1;
+  }
+}
+
+/* =========================
+   Symbols init
+========================= */
+let symbols = [];
+function initSymbols() {
+  symbols = [];
+  const maxSymbols = Math.min(250, Math.floor((canvas.width * canvas.height) / 2000));
+
+  const centers = [];
+  for (let i = 0; i < spiralDensity; i++) {
+    const angle = (i * 2 * Math.PI) / PHI;
+    const radius = Math.sqrt(i) * 60;
+    centers.push({
+      x: canvas.width / 2 + radius * Math.cos(angle),
+      y: canvas.height / 2 + radius * Math.sin(angle),
+    });
+  }
+
+  for (let i = 0; i < maxSymbols; i++) {
+    if (Math.random() > 0.3) {
+      const center = centers[Math.floor(Math.random() * centers.length)];
+      const speed = 0.5 + Math.random() * 2;
+      const yPos = Math.random() * canvas.height;
+      const symbol = new LaplaceSymbol(center.x, yPos, speed, yPos);
+      symbols.push(symbol);
+
+      if (symbols.length > 1 && Math.random() > 0.85) {
+        const other = symbols[Math.floor(Math.random() * (symbols.length - 1))];
+        symbol.entangle(other);
+      }
+    }
+  }
+}
+initSymbols();
+
+/* =========================
+   Draw helpers
+========================= */
+function drawSPlaneOverlay() {
+  const centerX = canvas.width - 100;
+  const centerY = canvas.height - 150;
+  const scale = 20;
+
+  ctx.strokeStyle = "rgba(100,100,100,0.3)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(centerX - 40, centerY);
+  ctx.lineTo(centerX + 40, centerY);
+  ctx.moveTo(centerX, centerY - 40);
+  ctx.lineTo(centerX, centerY + 40);
+  ctx.stroke();
+
+  ctx.strokeStyle =
+    laplaceEngine.stability === "UNSTABLE" ? "rgba(255,0,0,0.5)" : "rgba(0,255,0,0.5)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(centerX, centerY - 40);
+  ctx.lineTo(centerX, centerY + 40);
+  ctx.stroke();
+
+  for (const pole of laplaceEngine.poles) {
+    const x = centerX + pole.real * scale;
+    const y = centerY - pole.imag * scale;
+
+    ctx.fillStyle = pole.real > 0 ? "rgba(255,100,100,0.8)" : "rgba(100,255,100,0.8)";
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = ctx.fillStyle;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x - 3, y - 3);
+    ctx.lineTo(x + 3, y + 3);
+    ctx.moveTo(x + 3, y - 3);
+    ctx.lineTo(x - 3, y + 3);
+    ctx.stroke();
+  }
+}
+
+function drawConnections() {
+  for (const symbol of symbols) {
+    if (symbol.entangled && symbol.opacity > 0.5) {
+      const correlation = Math.abs(symbol.systemResponse + symbol.entangled.systemResponse);
+      const alpha = Math.min(0.3, correlation * 0.5);
+      const width = symbol.isUnstable || symbol.entangled.isUnstable ? 2 : 1;
+
+      ctx.strokeStyle = `rgba(100,255,200,${alpha})`;
+      ctx.lineWidth = width;
+
+      ctx.beginPath();
+      ctx.moveTo(symbol.x, symbol.y);
+      ctx.lineTo(symbol.entangled.x, symbol.entangled.y);
+      ctx.stroke();
+    }
+  }
+}
+
+function drawFFT() {
+  const height = canvas.height / 3;
+  const width = canvas.width;
+  const barWidth = width / signalSize;
+
+  const gradient = ctx.createLinearGradient(0, canvas.height - height, 0, canvas.height);
+  if (laplaceEngine.stability === "UNSTABLE") {
+    gradient.addColorStop(0, "rgba(100,20,0,0.2)");
+    gradient.addColorStop(1, "rgba(200,50,0,0.4)");
+  } else if (laplaceEngine.stability === "STABLE") {
+    gradient.addColorStop(0, "rgba(0,50,100,0.2)");
+    gradient.addColorStop(1, "rgba(0,100,200,0.4)");
+  } else {
+    gradient.addColorStop(0, "rgba(0,50,0,0.1)");
+    gradient.addColorStop(1, "rgba(0,100,0,0.3)");
+  }
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, canvas.height - height, width, height);
+
+  ctx.strokeStyle =
+    laplaceEngine.stability === "UNSTABLE" ? "rgba(255,100,0,0.8)" : "rgba(0,255,100,0.8)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i < signalSize / 2; i++) {
+    const x = i * barWidth * 2;
+    const magnitude = currentFFT.magnitudes[i] * 100;
+    const impulseInfluence = laplaceEngine.getImpulseResponse(i * 0.1);
+    const y = canvas.height - magnitude * (1 + Math.abs(impulseInfluence) * laplacePower);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  drawSPlaneOverlay();
+
+  const dominantFreq = currentFFT.magnitudes.indexOf(Math.max(...currentFFT.magnitudes));
+  const sampleValue = laplaceEngine.getImpulseResponse(performance.now() / 1000);
+
+  document.getElementById("freqValue").textContent = (dominantFreq * 2).toFixed(1);
+  document.getElementById("phaseValue").textContent =
+    ((currentFFT.phases[dominantFreq] || 0) * 180) / Math.PI.toFixed?.(1) ?? "0.0";
+
+  document.getElementById("laplaceValue").textContent = sampleValue.toFixed(3);
+  document.getElementById("harmonyValue").textContent = Math.floor(phiHarmony * 100);
+
+  const stabilityElement = document.getElementById("stabilityValue");
+  stabilityElement.textContent = laplaceEngine.stability;
+  stabilityElement.className =
+    laplaceEngine.stability === "UNSTABLE"
+      ? "unstable"
+      : laplaceEngine.stability === "STABLE"
+      ? "stable"
+      : "";
+}
+
+/* =========================
+   Animation loop
+========================= */
+let conceptIndex = 0;
+let conceptTimer = 0;
+let frameCount = 0;
+
+function animate() {
+  frameCount++;
+  globalPhase += 0.02;
+
+  laplaceEngine.updatePoles();
+
+  const fadeAmount = laplaceEngine.stability === "UNSTABLE" ? 0.08 : 0.05;
+  ctx.fillStyle = `rgba(0,0,0,${fadeAmount})`;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  if (frameCount % 15 === 0) {
+    const bgIntensity = laplaceEngine.stability === "UNSTABLE" ? 0.04 : 0.02;
+    ctx.strokeStyle = `rgba(${laplaceEngine.stability === "UNSTABLE" ? 100 : 0}, 50, 0, ${bgIntensity})`;
+    ctx.lineWidth = 0.5;
+
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+
+    for (let i = 0; i < 5; i++) {
+      const impulse = laplaceEngine.getImpulseResponse(i * 0.1);
+      const radius = 50 + i * 30 * (1 + Math.abs(impulse));
+      ctx.beginPath();
+      ctx.arc(
+        centerX + Math.sin(globalPhase + i) * 100,
+        centerY + Math.cos(globalPhase + i) * 100,
+        radius,
+        0,
+        Math.PI * 2
+      );
+      ctx.stroke();
+    }
+  }
+
+  if (frameCount % 3 === 0) {
+    currentSignal = generateSignal(signalSize);
+    currentFFT = quickFFT(currentSignal);
+  }
+
+  drawConnections();
+  drawFFT();
+  for (const s of symbols) s.draw();
+
+  conceptTimer++;
+  if (conceptTimer > 150) {
+    conceptIndex = (conceptIndex + 1) % ontologicalConcepts.length;
+    overlay.textContent = ontologicalConcepts[conceptIndex];
+
+    const impulseResponse = laplaceEngine.getImpulseResponse(performance.now() / 1000);
+    const [r, g, b] = getLaplaceColor(conceptIndex, 0, impulseResponse);
+    overlay.style.color = `rgba(${r}, ${g}, ${b}, 0.85)`;
+    overlay.style.textShadow =
+      `0 0 15px rgba(${r}, ${g}, ${b}, 1), 0 0 30px rgba(${r}, ${g}, ${b}, 0.5)`;
+
+    conceptTimer = 0;
+  }
+
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+
+/* =========================
+   Events / Controls
+========================= */
+document.getElementById("fftResonance").addEventListener("input", (e) => {
+  fftResonance = e.target.value / 100;
+});
+document.getElementById("spiralDensity").addEventListener("input", (e) => {
+  spiralDensity = parseInt(e.target.value, 10);
+  initSymbols();
+});
+document.getElementById("phiHarmony").addEventListener("input", (e) => {
+  phiHarmony = e.target.value / 100;
+});
+document.getElementById("laplacePower").addEventListener("input", (e) => {
+  laplacePower = e.target.value / 100;
+});
+document.getElementById("systemStability").addEventListener("input", (e) => {
+  systemStability = e.target.value / 100; // -1..1
+  laplaceEngine.initializeSPlane();
+});
+document.getElementById("chaosLevel").addEventListener("input", (e) => {
+  chaosLevel = e.target.value / 100;
+});
+
+canvas.addEventListener("mousemove", (e) => {
+  mouseX = e.clientX;
+  mouseY = e.clientY;
+});
+canvas.addEventListener(
+  "touchstart",
+  (e) => {
+    e.preventDefault();
+    mouseX = e.touches[0].clientX;
+    mouseY = e.touches[0].clientY;
+  },
+  { passive: false }
+);
+canvas.addEventListener(
+  "touchmove",
+  (e) => {
+    e.preventDefault();
+    mouseX = e.touches[0].clientX;
+    mouseY = e.touches[0].clientY;
+
+    const spawnCount = laplaceEngine.stability === "UNSTABLE" ? 8 : 3;
+    for (let i = 0; i < spawnCount; i++) {
+      const speed = 0.5 + Math.random() * 3;
+      const yPos = mouseY + (Math.random() - 0.5) * 150;
+      const symbol = new LaplaceSymbol(mouseX, yPos, speed, yPos);
+      symbols.push(symbol);
+    }
+    if (symbols.length > 400) symbols = symbols.slice(-300);
+  },
+  { passive: false }
+);
+</script>
+</body>
+</html>
